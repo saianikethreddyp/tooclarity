@@ -808,25 +808,7 @@ export default function L2DialogBox({
     return Object.fromEntries(filteredEntries) as import("@/lib/localDb").CourseRecord;
   };
 
-  const resolveLocalBranchName = () => {
-    if (selectedBranchIdForProgram) {
-      const match = uniqueRemoteBranches.find((b) => b._id === selectedBranchIdForProgram);
-      if (match?.branchName) return match.branchName;
-    }
-    return "Main Institution";
-  };
 
-  const persistAdminProgramsToIndexedDb = async (coursesToPersist: Course[]) => {
-    const branchName = resolveLocalBranchName();
-    const sanitizedCourses = coursesToPersist.map((course) => sanitizeCourseForLocalDb(course));
-    const existingGroups = await getCoursesGroupsByBranchName(branchName);
-    if (existingGroups.length) {
-      const current = existingGroups[0];
-      await updateCoursesGroupInDB({ ...current, branchName, courses: sanitizedCourses });
-    } else {
-      await addCoursesGroupToDB({ branchName, courses: sanitizedCourses });
-    }
-  };
 
   const isSubscriptionProgram = adminFlow || mode === "subscriptionProgram" || mode === "settingsEdit";
   const DialogOpen = renderMode === "inline" ? true : open !== undefined ? open : isOpen;
@@ -836,6 +818,12 @@ export default function L2DialogBox({
   useEffect(() => {
     const syncInstitutionData = async () => {
       try {
+        if (isSubscriptionProgram && institutionTypeProp) {
+          setInstitutionType(institutionTypeProp);
+          setIsCourseOrBranch(localStorage.getItem("selected"));
+          return;
+        }
+
         const institutions = await getAllInstitutionsFromDB();
         const latestInstitution =
           institutions.length > 0
@@ -862,7 +850,7 @@ export default function L2DialogBox({
     if (DialogOpen) {
       syncInstitutionData();
     }
-  }, [DialogOpen, institutionTypeProp]);
+  }, [DialogOpen, institutionTypeProp, isSubscriptionProgram]);
 
 
   useEffect(() => {
@@ -1467,8 +1455,7 @@ export default function L2DialogBox({
           editMode ? "Program updated successfully" : "Program created successfully"
         );
 
-        // Update local state if needed
-        // await persistAdminProgramsToIndexedDb(uploadedCourses); 
+        // Update local state if needed 
 
         if (editMode) {
           onEditSuccess?.();

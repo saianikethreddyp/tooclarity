@@ -1173,6 +1173,31 @@ export const programsAPI = {
     const branches = Array.isArray((payload as { data?: unknown })?.data) ? (payload as { data: unknown[] }).data : (Array.isArray(payload) ? payload : []);
     return { success: true, data: { branches } } as ApiResponse;
   },
+  // Paginated versions for Listings page (cursor-based)
+  listPaginated: async (institutionId: string, limit = 10, cursor?: string | null): Promise<{ programs: Record<string, unknown>[]; nextCursor: string | null }> => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (cursor) params.set('cursor', cursor);
+    const res = await apiRequest(`/v1/institutions/${encodeURIComponent(institutionId)}/courses?${params.toString()}`, { method: 'GET' });
+    const payload = res as { data?: unknown; nextCursor?: string | null };
+    const raw = payload?.data || [];
+    const arr = Array.isArray(raw) ? raw : [];
+    const programs = arr.map((c: Record<string, unknown>) => ({
+      ...c,
+      programName: c.programName || c.courseName || c.selectBranch,
+      leadsGenerated: typeof c.leadsGenerated === 'number' ? c.leadsGenerated : 0,
+      status: c.status || 'Live',
+    }));
+    return { programs, nextCursor: payload?.nextCursor || null };
+  },
+  listBranchesPaginated: async (institutionId: string, limit = 10, cursor?: string | null): Promise<{ branches: Record<string, unknown>[]; nextCursor: string | null }> => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (cursor) params.set('cursor', cursor);
+    const res = await apiRequest(`/v1/institutions/${encodeURIComponent(institutionId)}/branches?${params.toString()}`, { method: 'GET' });
+    const payload = res as { data?: unknown; nextCursor?: string | null };
+    const raw = payload?.data || [];
+    const branches = Array.isArray(raw) ? raw : [];
+    return { branches, nextCursor: payload?.nextCursor || null };
+  },
   update: async (programId: string, payload: Record<string, unknown> & { institution?: string }): Promise<ApiResponse> => {
     const institutionId = String(payload?.institution || '');
     if (!institutionId) throw new Error('institution required');

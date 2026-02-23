@@ -9,7 +9,7 @@ import { useAuth } from "@/lib/auth-context";
 import { useInstitution } from "@/lib/hooks/dashboard-hooks";
 import { programsAPI, getMyInstitution, branchAPI } from "@/lib/api";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useInfiniteQuery } from "@tanstack/react-query";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPlus, faPhone, faMapMarkerAlt, faLink, faLocationArrow, faTrashAlt, faEdit } from "@fortawesome/free-solid-svg-icons";
 import L2DialogBox from "@/components/auth/L2DialogBox";
@@ -128,38 +128,46 @@ export function Listings() {
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });
   };
 
-  // Client-side pagination state
-  const [visibleBranchesCount, setVisibleBranchesCount] = useState<number>(5);
-  const [visibleProgramsCount, setVisibleProgramsCount] = useState<number>(5);
+  // Cursor-based pagination via useInfiniteQuery
+  const PAGE_SIZE = 10;
 
   const {
-    data: branchesList = [],
-    isLoading: isBranchesLoading
-  } = useQuery({
-    queryKey: ['programs-page-branches', inst?._id],
+    data: branchesData,
+    isLoading: isBranchesLoading,
+    fetchNextPage: fetchNextBranches,
+    hasNextPage: hasMoreBranches,
+    isFetchingNextPage: isFetchingMoreBranches,
+  } = useInfiniteQuery({
+    queryKey: ['branches-infinite', inst?._id],
     enabled: !!inst?._id,
-    queryFn: async () => {
-      const res = await programsAPI.listBranchesForInstitutionAdmin(String(inst?._id)) as { data?: { branches?: Record<string, unknown>[] } };
-      return (res?.data?.branches || []) as unknown as BranchDetail[];
+    initialPageParam: null as string | null,
+    queryFn: async ({ pageParam }) => {
+      return programsAPI.listBranchesPaginated(String(inst?._id), PAGE_SIZE, pageParam);
     },
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     staleTime: 5 * 60 * 1000,
   });
 
   const {
-    data: programsList = [],
-    isLoading: isProgramsLoading
-  } = useQuery({
-    queryKey: ['programs-page-list-institution-admin', inst?._id],
+    data: programsData,
+    isLoading: isProgramsLoading,
+    fetchNextPage: fetchNextPrograms,
+    hasNextPage: hasMorePrograms,
+    isFetchingNextPage: isFetchingMorePrograms,
+  } = useInfiniteQuery({
+    queryKey: ['programs-infinite', inst?._id],
     enabled: !!inst?._id,
-    queryFn: async () => {
-      const res = await programsAPI.listForInstitutionAdminWithMetrics(String(inst?._id)) as { data?: { programs?: Record<string, unknown>[] } };
-      return (res?.data?.programs || []) as unknown as ExtendedProgram[];
+    initialPageParam: null as string | null,
+    queryFn: async ({ pageParam }) => {
+      return programsAPI.listPaginated(String(inst?._id), PAGE_SIZE, pageParam);
     },
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     staleTime: 60 * 1000,
   });
 
-  const allBranches = branchesList;
-  const allProgramsRaw = programsList;
+  // Flatten paginated pages into single arrays
+  const allBranches = (branchesData?.pages ?? []).flatMap(p => p.branches) as unknown as BranchDetail[];
+  const allProgramsRaw = (programsData?.pages ?? []).flatMap(p => p.programs) as unknown as ExtendedProgram[];
 
 
 
@@ -229,7 +237,7 @@ export function Listings() {
     try {
       const res = await branchAPI.deleteBranch(id as any, inst._id);
       if (res.success) {
-        queryClient.invalidateQueries({ queryKey: ['branches-infinite'] });
+        queryClient.invalidateQueries({ queryKey: ['branches-infinite', inst._id] });
         setViewModal(null);
         toast.success("Branch removed");
       }
@@ -244,7 +252,7 @@ export function Listings() {
     try {
       const res = await programsAPI.remove(id, inst._id);
       if (res.success) {
-        queryClient.invalidateQueries({ queryKey: ['programs-infinite'] });
+        queryClient.invalidateQueries({ queryKey: ['programs-infinite', inst._id] });
         setViewModal(null);
         toast.success("Listing removed");
       }
@@ -259,7 +267,7 @@ export function Listings() {
     try {
       const res = await branchAPI.updateBranch(editData._id as any, editData, inst._id);
       if (res.success) {
-        queryClient.invalidateQueries({ queryKey: ['branches-infinite'] });
+        queryClient.invalidateQueries({ queryKey: ['branches-infinite', inst._id] });
         setIsEditing(false);
         setViewModal(null);
         toast.success("Branch updated");
@@ -311,8 +319,8 @@ export function Listings() {
               mode="subscriptionProgram"
               adminFlow={true}
               onSuccess={() => {
-                queryClient.invalidateQueries({ queryKey: ['programs-list'] });
-                queryClient.invalidateQueries({ queryKey: ['programs-page-branches'] });
+                queryClient.invalidateQueries({ queryKey: ['programs-infinite', inst?._id] });
+                queryClient.invalidateQueries({ queryKey: ['branches-infinite', inst?._id] });
                 setAddInlineMode('none');
               }}
             />
@@ -329,15 +337,12 @@ export function Listings() {
       {/* 4. Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {viewToggle === 'branch' ? (
-          allBranches.slice(0, visibleBranchesCount).map((branch) => {
-            // 🛡️ Guard Clause: Skip if branch data is missing
+          allBranches.map((branch) => {
             if (!branch || !branch._id) return null;
-
             return (
               <_Card key={branch._id} className="border-none shadow-sm rounded-[32px] bg-white dark:bg-gray-900 p-8">
                 <div className="flex justify-between items-start mb-6">
                   <div>
-                    {/* 🛡️ Optional Chaining (?.) for extra safety */}
                     <h3 className="font-bold text-lg">{branch?.branchName || "Unnamed Branch"}</h3>
                     <p className="text-xs text-gray-400">Branch ID: {branch?._id?.slice(-6)}</p>
                   </div>
@@ -361,7 +366,7 @@ export function Listings() {
             );
           })
         ) : (
-          normalizedPrograms.slice(0, visibleProgramsCount).map((p) => (
+          normalizedPrograms.map((p) => (
             <_Card key={p._id} className="border-none shadow-sm rounded-[32px] bg-white dark:bg-gray-900 p-8">
               <div className="flex justify-between items-start mb-6">
                 <div>
@@ -454,7 +459,7 @@ export function Listings() {
                     institutionId={inst?._id}
                     institutionType={rawInst?.instituteType}
                     mode="subscriptionProgram"
-                    onEditSuccess={() => { queryClient.invalidateQueries({ queryKey: ['programs-list'] }); setViewModal(null); toast.success("Updated!"); }}
+                    onEditSuccess={() => { queryClient.invalidateQueries({ queryKey: ['programs-infinite', inst?._id] }); setViewModal(null); toast.success("Updated!"); }}
                   />
                 )}
               </div>
@@ -485,22 +490,24 @@ export function Listings() {
       )}
 
       <div className="flex justify-center pt-8">
-        {viewToggle === 'branch' && visibleBranchesCount < allBranches.length && (
+        {viewToggle === 'branch' && hasMoreBranches && (
           <Button
-            onClick={() => setVisibleBranchesCount((prev) => prev + 5)}
+            onClick={() => fetchNextBranches()}
+            disabled={isFetchingMoreBranches}
             variant="outline"
             className="rounded-xl px-10"
           >
-            Load More Branches
+            {isFetchingMoreBranches ? "Loading..." : "Load More Branches"}
           </Button>
         )}
-        {viewToggle === 'course' && visibleProgramsCount < normalizedPrograms.length && (
+        {viewToggle === 'course' && hasMorePrograms && (
           <Button
-            onClick={() => setVisibleProgramsCount((prev) => prev + 5)}
+            onClick={() => fetchNextPrograms()}
+            disabled={isFetchingMorePrograms}
             variant="outline"
             className="rounded-xl px-10"
           >
-            Load More Courses
+            {isFetchingMorePrograms ? "Loading..." : "Load More Courses"}
           </Button>
         )}
       </div>
